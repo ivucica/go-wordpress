@@ -1,10 +1,10 @@
 package wordpress
 
 import (
-	"go.opencensus.io/trace"
 	"encoding/base64"
 	"fmt"
 	"github.com/elgris/sqrl"
+	"go.opencensus.io/trace"
 	"golang.org/x/net/context"
 	"strconv"
 )
@@ -43,6 +43,9 @@ type Term struct {
 type TermQueryOptions struct {
 	After string `param:"after"`
 	Limit int    `param:"limit"`
+
+	Order          string `param:"order_by"`
+	OrderAscending bool   `param:"order_asc"`
 
 	Id      int64   `param:"term_id"`
 	IdIn    []int64 `param:"term_id__in"`
@@ -130,11 +133,26 @@ func getTerms(c context.Context, termIds ...int64) ([]*Term, error) {
 	return ret, nil
 }
 
-// queryTerms returns the ids of the terms that match the query
+// QueryTerms returns the ids of the terms that match the query
+func QueryTerms(c context.Context, opts *TermQueryOptions) (Iterator, error) {
+	return queryTerms(c, opts)
+}
+
 func queryTerms(c context.Context, opts *TermQueryOptions) (Iterator, error) {
+	order := opts.Order
+	if len(order) == 0 {
+		order = "t.term_id ASC"
+	} else {
+		if opts.OrderAscending {
+			order += " ASC"
+		} else {
+			order += " DESC"
+		}
+	}
+
 	q := sqrl.Select("t.term_id").
 		From(table(c, "terms") + " AS t").
-		OrderBy("t.term_id ASC")
+		OrderBy(order)
 
 	var requireTaxonomy, requireRelationships bool
 
@@ -208,9 +226,24 @@ func queryTerms(c context.Context, opts *TermQueryOptions) (Iterator, error) {
 	if opts.After != "" {
 		// ignore `q.After` if any errors occur
 		if b, err := base64.URLEncoding.DecodeString(opts.After); err == nil {
-			q = q.Where("t.term_id > ?", string(b))
+			pred := opts.Order
+			if len(pred) == 0 {
+				pred = "t.term_id"
+			}
+
+			if opts.OrderAscending {
+				pred += ">"
+			} else {
+				pred += "<"
+			}
+
+			pred += " ?"
+
+			q = q.Where(pred, string(b))
 		}
 	}
+
+	q = q.OrderBy(order)
 
 	if opts.Limit == 0 {
 		opts.Limit = 10
